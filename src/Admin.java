@@ -26,7 +26,6 @@ public class Admin {
         factory.setHost(Constants.LOCALHOST);
         connection = factory.newConnection();
         channel = connection.createChannel();
-        channel.basicQos(1);
 
         // exchange
         channel.exchangeDeclare(Constants.TECHNICIAN_EXCHANGE, BuiltinExchangeType.TOPIC);
