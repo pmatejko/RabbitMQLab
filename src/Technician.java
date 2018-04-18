@@ -4,7 +4,6 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.Consumer;
-import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
 
 import java.io.BufferedReader;
@@ -15,10 +14,8 @@ import java.util.concurrent.TimeoutException;
 
 public class Technician {
     private static final String TECHNICIAN = "Technician:";
-    private static final String LOCALHOST = "localhost";
-    private static final String EXCHANGE_NAME = "exchange1";
-    private Connection connection;
-    private Channel channel;
+    private final Connection connection;
+    private final Channel channel;
 
     public Technician(String... types) throws IOException, TimeoutException {
         // info
@@ -31,34 +28,53 @@ public class Technician {
 
         // connection & channel
         ConnectionFactory factory = new ConnectionFactory();
-        factory.setHost(LOCALHOST);
+        factory.setHost(Constants.LOCALHOST);
         connection = factory.newConnection();
         channel = connection.createChannel();
         channel.basicQos(1);
 
         // exchange
-        channel.exchangeDeclare(EXCHANGE_NAME, BuiltinExchangeType.TOPIC);
+        channel.exchangeDeclare(Constants.TECHNICIAN_EXCHANGE, BuiltinExchangeType.TOPIC);
+        channel.exchangeDeclare(Constants.DOCTOR_EXCHANGE, BuiltinExchangeType.TOPIC);
+        channel.exchangeDeclare(Constants.ADMIN_EXCHANGE, BuiltinExchangeType.FANOUT);
 
         // queue & bind
         for (String type : types) {
             channel.queueDeclare(type, false, false, false, null);
-            channel.queueBind(type, EXCHANGE_NAME, type);
+            channel.queueBind(type, Constants.TECHNICIAN_EXCHANGE, type);
         }
 
+        String adminQueue = channel.queueDeclare().getQueue();
+        channel.queueBind(adminQueue, Constants.ADMIN_EXCHANGE, "");
+
         // consumer (message handling)
-        Consumer consumer = new DefaultConsumer(channel) {
+        Consumer adminConsumer = new SimpleConsumer(channel);
+        Consumer doctorConsumer = new SimpleConsumer(channel) {
             @Override
-            public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body) throws IOException {
-                String message = new String(body, StandardCharsets.UTF_8);
-                System.out.println("Received: " + message);
+            public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties props, byte[] body) throws IOException {
+                super.handleDelivery(consumerTag, envelope, props, body);
+
+                try {
+                    Thread.sleep(1_000);
+
+                    String response = getMessage().concat(" done");
+                    channel.basicPublish(Constants.DOCTOR_EXCHANGE, props.getReplyTo(), null,
+                            response.getBytes(StandardCharsets.UTF_8));
+
+                    channel.basicAck(envelope.getDeliveryTag(), false);
+                    System.out.println("Sent: " + response);
+                } catch (InterruptedException e) {
+                    System.err.println(e.toString().toUpperCase());
+                }
             }
         };
 
         // start listening
         System.out.println("Waiting for messages...");
         for (String type : types) {
-            channel.basicConsume(type, true, consumer);
+            channel.basicConsume(type, false, doctorConsumer);
         }
+        channel.basicConsume(adminQueue, true, adminConsumer);
     }
 
     public static void main(String[] argv) throws Exception {

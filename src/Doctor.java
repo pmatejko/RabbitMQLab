@@ -1,7 +1,5 @@
-import com.rabbitmq.client.BuiltinExchangeType;
-import com.rabbitmq.client.Channel;
-import com.rabbitmq.client.Connection;
-import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.*;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -9,32 +7,49 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeoutException;
 
 public class Doctor {
-    public static final String EXCHANGE_NAME = "exchange1";
-    private Connection connection;
-    private Channel channel;
+    private static final String DOCTOR = "Doctor";
+    private final Connection connection;
+    private final Channel channel;
+    private final AMQP.BasicProperties props;
 
     public Doctor() throws IOException, TimeoutException {
         // info
-        System.out.println("Doctor");
+        System.out.println(DOCTOR);
 
         // connection & channel
         ConnectionFactory factory = new ConnectionFactory();
-        factory.setHost("localhost");
+        factory.setHost(Constants.LOCALHOST);
         connection = factory.newConnection();
         channel = connection.createChannel();
 
         // exchange
-        channel.exchangeDeclare(EXCHANGE_NAME, BuiltinExchangeType.TOPIC);
+        channel.exchangeDeclare(Constants.TECHNICIAN_EXCHANGE, BuiltinExchangeType.TOPIC);
+        channel.exchangeDeclare(Constants.DOCTOR_EXCHANGE, BuiltinExchangeType.TOPIC);
+        channel.exchangeDeclare(Constants.ADMIN_EXCHANGE, BuiltinExchangeType.FANOUT);
+
+        // queue & bind
+        String adminQueue = channel.queueDeclare().getQueue();
+        channel.queueBind(adminQueue, Constants.ADMIN_EXCHANGE, "");
+
+        String technicianQueue = channel.queueDeclare().getQueue();
+        channel.queueBind(technicianQueue, Constants.DOCTOR_EXCHANGE, technicianQueue);
+        props = new AMQP.BasicProperties(null, null, null, null,
+                null, null, technicianQueue, null, null, null,
+                null, null, null, null);
+
+        // consumer (message handling)
+        Consumer consumer = new SimpleConsumer(channel);
+        channel.basicConsume(technicianQueue, true, consumer);
+        channel.basicConsume(adminQueue, true, consumer);
     }
 
     public void startWorking() throws IOException {
-        boolean working = true;
         BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
 
-        while (working) {
+        while (true) {
             // read msg
             System.out.println("Enter message like this:\n" +
-                    "type-of-exam name-of-patient");
+                    "name-of-patient type-of-exam");
             String input = br.readLine();
 
             // break condition
@@ -43,13 +58,14 @@ public class Doctor {
                 break;
             }
 
-            String[] splittedInput = input.split(" ");
-            String key = splittedInput[0];
-            String message = splittedInput[1];
-
-            // publish
-            channel.basicPublish(EXCHANGE_NAME, key, null, message.getBytes(StandardCharsets.UTF_8));
-            System.out.println("Sent: " + message);
+            try {
+                // publish
+                String key = input.split(" ")[1];
+                channel.basicPublish(Constants.TECHNICIAN_EXCHANGE, key, props, input.getBytes(StandardCharsets.UTF_8));
+                System.out.println("Sent: " + input);
+            } catch (ArrayIndexOutOfBoundsException e) {
+                System.out.println("Wrong message format");
+            }
         }
     }
 
